@@ -95,7 +95,7 @@ resource "aws_security_group" "node_sg" {
     Name = "cicd-node-sg"
   }
 }
-/*
+
 
 resource "aws_eks_cluster" "cicd" {
   name     = "cicd-cluster"
@@ -199,4 +199,4 @@ resource "aws_iam_role_policy_attachment" "devopsshack_node_group_ebs_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
 
-*/
+
