@@ -18,7 +18,7 @@ resource "aws_instance" "Server" {
   }
 }
 
-/*
+
 ############################
 # SonarQube Node
 ############################
@@ -298,6 +298,6 @@ resource "aws_eip" "jenkins_eip" {
   domain   = "vpc"
   tags     = { Name = "Jenkins-EIP" }
 }
-*/
+
 
 
