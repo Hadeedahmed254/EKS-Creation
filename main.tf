@@ -11,9 +11,7 @@ provider "aws" {
   region = "us-east-1"
 }
 
-variable "ssh_key_name" {
-  type = string
-}
+
 
 # ---------------- VPC ----------------
 
@@ -171,13 +169,16 @@ resource "aws_iam_role" "ebs_csi_role" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" =
-          "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+          (format(
+            "%s:sub",
+            replace(aws_iam_openid_connect_provider.eks.url, "https://", "")
+          )) = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
         }
       }
     }]
   })
 }
+
 
 resource "aws_iam_role_policy_attachment" "ebs_csi_policy" {
   role       = aws_iam_role.ebs_csi_role.name
