@@ -7,14 +7,14 @@
 
 resource "aws_instance" "sonar" {
   ami                         = "ami-0ecb62995f68bb549"
-  instance_type               = "m7i-flex.large"
+  instance_type               = "c7i-flex.large"
   subnet_id                   = aws_subnet.cicd_subnet[0].id
   vpc_security_group_ids      = [aws_security_group.cicd_sga.id]
   key_name                    = "django"
   associate_public_ip_address = true
 
   root_block_device {
-    volume_size = 15
+    volume_size = 20
     volume_type = "gp3"
   }
 
@@ -67,14 +67,14 @@ EOF
 
 resource "aws_instance" "nexus" {
   ami                         = "ami-0ecb62995f68bb549"
-  instance_type               = "m7i-flex.large"
+  instance_type               = "c7i-flex.large"
   subnet_id                   = aws_subnet.cicd_subnet[0].id
   vpc_security_group_ids      = [aws_security_group.cicd_sga.id]
   key_name                    = "django"
   associate_public_ip_address = true
 
   root_block_device {
-    volume_size = 15
+    volume_size = 20
     volume_type = "gp3"
   }
 
@@ -140,7 +140,7 @@ resource "aws_instance" "jenkins" {
   associate_public_ip_address = true
 
   root_block_device {
-    volume_size = 30
+    volume_size = 25
     volume_type = "gp3"
   }
 
