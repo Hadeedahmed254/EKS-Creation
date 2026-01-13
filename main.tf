@@ -11,6 +11,11 @@ provider "aws" {
   region = "us-east-1"
 }
 
+variable "ssh_key_name" {
+  type = string
+}
+
+# ---------------- VPC ----------------
 
 resource "aws_vpc" "cicd_vpc" {
   cidr_block = "10.0.0.0/16"
@@ -21,7 +26,7 @@ resource "aws_vpc" "cicd_vpc" {
 }
 
 resource "aws_subnet" "cicd_subnet" {
-  count = 2
+  count                   = 2
   vpc_id                  = aws_vpc.cicd_vpc.id
   cidr_block              = cidrsubnet(aws_vpc.cicd_vpc.cidr_block, 8, count.index)
   availability_zone       = element(["us-east-1a", "us-east-1b"], count.index)
@@ -34,10 +39,6 @@ resource "aws_subnet" "cicd_subnet" {
 
 resource "aws_internet_gateway" "cicd_igw" {
   vpc_id = aws_vpc.cicd_vpc.id
-
-  tags = {
-    Name = "cicd-igw"
-  }
 }
 
 resource "aws_route_table" "cicd_routetable" {
@@ -47,10 +48,6 @@ resource "aws_route_table" "cicd_routetable" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.cicd_igw.id
   }
-
-  tags = {
-    Name = "cicd-route-table"
-  }
 }
 
 resource "aws_route_table_association" "a" {
@@ -58,6 +55,8 @@ resource "aws_route_table_association" "a" {
   subnet_id      = aws_subnet.cicd_subnet[count.index].id
   route_table_id = aws_route_table.cicd_routetable.id
 }
+
+# ---------------- Security Groups ----------------
 
 resource "aws_security_group" "cluster_sg" {
   vpc_id = aws_vpc.cicd_vpc.id
@@ -67,10 +66,6 @@ resource "aws_security_group" "cluster_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "cluster-sg"
   }
 }
 
@@ -90,12 +85,57 @@ resource "aws_security_group" "node_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = {
-    Name = "cicd-node-sg"
-  }
 }
 
+# ---------------- IAM ----------------
+
+resource "aws_iam_role" "cicd_cluster_role" {
+  name = "cicd-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "cicd_cluster_role_policy" {
+  role       = aws_iam_role.cicd_cluster_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+resource "aws_iam_role" "cicd_node_group_role" {
+  name = "cicd-node-group-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "node_worker" {
+  role       = aws_iam_role.cicd_node_group_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "node_cni" {
+  role       = aws_iam_role.cicd_node_group_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "node_ecr" {
+  role       = aws_iam_role.cicd_node_group_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+# ---------------- EKS ----------------
 
 resource "aws_eks_cluster" "cicd" {
   name     = "cicd-cluster"
@@ -107,14 +147,42 @@ resource "aws_eks_cluster" "cicd" {
   }
 }
 
-resource "aws_eks_addon" "ebs_csi_driver" {
-  cluster_name    = aws_eks_cluster.cicd.name
-  addon_name      = "aws-ebs-csi-driver"
-  
-  resolve_conflicts_on_create = "OVERWRITE"
-  resolve_conflicts_on_update = "OVERWRITE"
+data "aws_eks_cluster" "cicd" {
+  name = aws_eks_cluster.cicd.name
 }
 
+resource "aws_iam_openid_connect_provider" "eks" {
+  url = data.aws_eks_cluster.cicd.identity[0].oidc[0].issuer
+  client_id_list = ["sts.amazonaws.com"]
+  thumbprint_list = ["9e99a48a9960b14926bb7f3b02e22da0ecd8e9c7"]
+}
+
+# Role for EBS CSI Driver (IRSA)
+resource "aws_iam_role" "ebs_csi_role" {
+  name = "cicd-ebs-csi-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" =
+          "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_policy" {
+  role       = aws_iam_role.ebs_csi_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
 
 resource "aws_eks_node_group" "cicd_worker" {
   cluster_name    = aws_eks_cluster.cicd.name
@@ -136,67 +204,13 @@ resource "aws_eks_node_group" "cicd_worker" {
   }
 }
 
-resource "aws_iam_role" "cicd_cluster_role" {
-  name = "cicd-cluster-role"
+resource "aws_eks_addon" "ebs_csi_driver" {
+  cluster_name             = aws_eks_cluster.cicd.name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = aws_iam_role.ebs_csi_role.arn
 
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "eks.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  depends_on = [aws_eks_node_group.cicd_worker]
 }
-EOF
-}
-
-resource "aws_iam_role_policy_attachment" "cicd_cluster_role_policy" {
-  role       = aws_iam_role.cicd_cluster_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-}
-
-resource "aws_iam_role" "cicd_node_group_role" {
-  name = "cicd-node-group-role"
-
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "ec2.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
-}
-
-resource "aws_iam_role_policy_attachment" "cicd_node_group_role_policy" {
-  role       = aws_iam_role.cicd_node_group_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-}
-
-resource "aws_iam_role_policy_attachment" "cicd_node_group_cni_policy" {
-  role       = aws_iam_role.cicd_node_group_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-}
-
-resource "aws_iam_role_policy_attachment" "cicd_node_group_registry_policy" {
-  role       = aws_iam_role.cicd_node_group_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-}
-
-resource "aws_iam_role_policy_attachment" "devopsshack_node_group_ebs_policy" {
-  role       = aws_iam_role.cicd_node_group_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-}
-
-
