@@ -31,7 +31,3 @@ output "jenkins_eip" {
 output "nexus_public_ip" {
   value = aws_instance.nexus.public_ip
 }
-
-output "Server_ip" {
-  value = aws_instance.Server.public_ip
-}
